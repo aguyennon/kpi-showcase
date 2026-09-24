@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<!-- app/static/admin_login.html -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPI — Admin sign in</title>
+<style>
+  :root {
+    --bg: #171b21; --raised: #1e242c; --rule: #2b333d;
+    --text: #eef2f6; --muted: #7d8b99; --accent: #4a9fd8; --over: #cc4b41;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid;
+    place-items: center;   /* centres the form both ways in one line */
+  }
+  form {
+    width: 340px;
+    background: var(--raised);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 30px 28px;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 22px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  input {
+    width: 100%;
+    padding: 10px 12px;
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    width: 100%;
+    margin-top: 22px;
+    padding: 11px;
+    font: inherit;
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .error {
+    display: none;
+    margin-top: 16px;
+    font-size: 14px;
+    color: #f0a49e;
+  }
+</style>
+</head>
+<body>
+
+<!-- A plain HTML form posting straight to the server. No JavaScript needed
+     to sign in, which is one less thing that can break. -->
+<form method="post" action="/admin/login">
+  <h1>KPI admin</h1>
+
+  <label for="username">Username</label>
+  <input id="username" name="username" autocomplete="username" required autofocus>
+
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+  <button type="submit">Sign in</button>
+
+  <!-- Deliberately vague: it never says whether the username or the password
+       was wrong, or that the account is locked. -->
+  <p class="error" id="error">Those details didn't work. Check them and try again.</p>
+</form>
+
+<script>
+  // The server redirects here with ?error=1 after a failed attempt.
+  if (new URLSearchParams(location.search).has('error')) {
+    document.getElementById('error').style.display = 'block';
+  }
+</script>
+</body>
+</html>

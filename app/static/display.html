@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<!--
+  app/static/display.html
+
+  Station monitor. Open as:  /display?token=prep
+
+  DESIGN NOTE — why it looks like this:
+
+  This is a lineside display, not a dashboard. It's read from across a work bay
+  by someone holding a window frame, in a few seconds, without focusing. That
+  drives every choice:
+
+    - The timer is the hero. Everything else is supporting data and stays quiet.
+    - State is carried by a colour bar down the left edge and a background
+      shift, so the panel reads at a glance without anyone parsing text. This
+      is the andon convention from manufacturing — status as a colour you see
+      from a distance.
+    - No web fonts. The network blocks external CDNs, and a font that failed to
+      load would wreck the layout. Typography works through scale and weight.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPI — Station Display</title>
+<style>
+    :root {
+    --bg:    #171b21;
+    --rule:  #2b333d;
+    --text:  #eef2f6;
+    --muted: #7d8b99;
+    --run:   #4a9fd8;
+    --good:  #3f9e6b;
+    --warn:  #d9912f;
+    --over:  #cc4b41;
+  }
+
+  /* Belt and braces against default insets. If a gap still shows at the top
+     and left after this, it's the TV's overscan cropping the picture, not the
+     page — that's an LG picture setting, usually "Just Scan" or
+     "Aspect Ratio: Original". */
+  * { box-sizing: border-box; margin: 0; padding: 0; border: 0; }
+
+  html, body {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    transition: background-color 400ms ease;
+  }
+
+  body.is-flagged { background: #1d1a15; }
+  body.is-over    { background: #1f1615; }
+
+  /* Full-height colour down the left edge — the status signal you read from
+     across the bay without looking directly at the screen. */
+
+  .panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 26px 44px 34px;
+    min-width: 0;
+  }
+
+  /* Three columns so the centre item centres on the PANEL. With
+     space-between it would drift as the clock's width changed. */
+  .rail {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: baseline;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .who { grid-column: 2; font-size: 32px; font-weight: 600; }
+  .who .sep  { color: var(--muted); margin: 0 12px; font-weight: 400; }
+  .who .name { color: var(--muted); font-weight: 500; }
+
+  .wallclock {
+    grid-column: 3;
+    justify-self: end;
+    font-size: 30px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Scan confirmations, directly under the rail. Quiet by default, coloured
+     only when they have something to report. */
+  .scans {
+    display: flex;
+    justify-content: space-around;
+    padding: 26px 0 28px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .scan { text-align: center; }
+  .scan .key { font-size: 24px; color: var(--muted); font-weight: 500; }
+  .scan .val {
+    font-size: 40px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    margin-top: 6px;
+    color: var(--muted);
+  }
+  .scan.done .val { color: var(--good); }
+  .scan.warn .val { color: var(--warn); }
+
+  /* Two columns: times on the left, the job on the right. Both start at the
+     same baseline so the eye reads across rather than down. */
+  .main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 60px;
+    padding-top: 54px;
+  }
+
+  .times { display: flex; flex-direction: column; gap: 34px; }
+
+  .line { display: flex; align-items: baseline; gap: 18px; }
+
+  .line .key {
+    font-size: 46px;
+    color: var(--muted);
+    font-weight: 500;
+    /* Fixed width aligns both numbers into a column. Ragged numbers stacked
+       under each other look accidental. */
+    width: 230px;
+    text-align: right;
+  }
+
+  /* tabular-nums holds every digit to the same width so the timer doesn't
+     jitter as seconds tick over. Very noticeable at this size. */
+  .elapsed {
+    font-size: 72px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .elapsed.idle { color: var(--muted); font-weight: 400; }
+  .elapsed.over { color: var(--over); }
+
+  .expected {
+    font-size: 64px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+
+  .order {
+    font-size: 66px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .order.empty { color: var(--muted); font-weight: 400; }
+
+  .description {
+    font-size: 42px;
+    color: var(--muted);
+    margin-top: 16px;
+    line-height: 1.2;
+  }
+
+  /* Hidden until there's something to say. An always-visible empty banner
+     gets ignored, which defeats its purpose. */
+  .message {
+    margin-top: auto;
+    padding: 16px 22px;
+    border-radius: 4px;
+    border-left: 5px solid transparent;
+    font-size: 27px;
+    font-weight: 600;
+    display: none;
+  }
+  .message.show  { display: block; }
+  .message.error {
+    background: rgba(204,75,65,0.13);
+    border-left-color: var(--over);
+    color: #f0a49e;
+  }
+  .message.ok {
+    background: rgba(63,158,107,0.13);
+    border-left-color: var(--good);
+    color: #8fd4ac;
+  }
+
+  .flash {
+    position: fixed; inset: 0;
+    background: #fff;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease-out;
+  }
+  .flash.on { opacity: 0.22; transition: none; }
+</style>
+</head>
+<body>
+
+
+  <div class="panel">
+  
+    <div class="rail">
+      <div class="who">
+        <span id="station">–</span>
+        <span class="sep">·</span>
+        <span class="name" id="employee">No badge scanned</span>
+      </div>
+      <div class="wallclock" id="wallclock">–</div>
+    </div>
+  
+    <div class="scans">
+      <div class="scan" id="status-start">
+        <div class="key">Start</div>
+        <div class="val" id="value-start">–</div>
+      </div>
+      <div class="scan" id="status-flag">
+        <div class="key">Flagged</div>
+        <div class="val" id="value-flag">–</div>
+      </div>
+      <div class="scan" id="status-finish">
+        <div class="key">Finish</div>
+        <div class="val" id="value-finish">–</div>
+      </div>
+    </div>
+  
+    <div class="main">
+      <div class="times">
+        <div class="line">
+          <div class="key">Time:</div>
+          <div class="elapsed idle" id="elapsed">–</div>
+        </div>
+        <div class="line">
+          <div class="key">Expected:</div>
+          <div class="expected" id="expected">–</div>
+        </div>
+      </div>
+  
+      <div class="job">
+        <div class="order empty" id="order">Ready to scan</div>
+        <div class="description" id="description"></div>
+      </div>
+    </div>
+  
+    <div class="message" id="message"></div>
+  </div>
+  
+  <div class="flash" id="flash"></div>
+
+<script>
+// ── Configuration ────────────────────────────────────────────────
+const params = new URLSearchParams(window.location.search);
+const TOKEN = params.get('token');
+
+if (!TOKEN) {
+  document.getElementById('message').className = 'message show error';
+  document.getElementById('message').textContent =
+    'No device token. Open this page as /display?token=prep';
+}
+
+// The LG browser can leave focus in the address bar after load, sending
+// scanner keystrokes to the URL instead of the page.
+document.body.tabIndex = -1;
+document.body.focus();
+document.addEventListener('click', () => document.body.focus());
+document.addEventListener('touchstart', () => document.body.focus());
+
+let state = null;
+
+// The TV's clock can be minutes off. Every timestamp in the system comes from
+// the server, so we measure the difference each poll and correct for it.
+let clockOffsetMs = 0;
+
+// ── Offline scan queue ───────────────────────────────────────────
+const QUEUE_KEY = 'kpi_scan_queue';
+
+function loadQueue() {
+  try {
+    return JSON.parse(localStorage.getItem(QUEUE_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function saveQueue(queue) {
+  localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+}
+
+function enqueue(scan) {
+  const queue = loadQueue();
+  queue.push(scan);
+  saveQueue(queue);
+  showMessage('Offline — ' + queue.length + ' scan(s) waiting to send', 'error');
+}
+
+// ── Scanner input capture ────────────────────────────────────────
+// The scanner is a keyboard: it types the barcode then sends Enter. No input
+// box — we listen at document level so focus can't be lost to a stray click.
+let buffer = '';
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    if (buffer.length > 0) {
+      submitScan(buffer);
+      buffer = '';
+    }
+    return;
+  }
+  if (event.key.length === 1) {
+    buffer += event.key;
+  }
+});
+
+// Scanners fire a whole barcode in well under a second, so anything that
+// stops arriving for a second wasn't a scan.
+let bufferTimer = null;
+document.addEventListener('keydown', () => {
+  clearTimeout(bufferTimer);
+  bufferTimer = setTimeout(() => { buffer = ''; }, 1000);
+});
+
+// ── Sending a scan ───────────────────────────────────────────────
+async function submitScan(rawCode) {
+  flash();
+
+  const scan = {
+    raw_code: rawCode,
+    device_token: TOKEN,
+    client_reported_at_utc: new Date().toISOString(),
+  };
+
+  try {
+    const response = await fetch('/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(scan),
+    });
+
+    if (response.status === 404) {
+      showMessage('Badge or device not recognised', 'error');
+      return;
+    }
+
+    if (response.status >= 400 && response.status < 500) {
+      showMessage('Scan rejected — check device setup', 'error');
+      return;
+    }
+
+    if (!response.ok) {
+      enqueue(scan);
+      return;
+    }
+
+    const data = await response.json();
+    if (data.parsed.type === 'UNKNOWN') {
+      showMessage('Barcode not recognised: ' + rawCode, 'error');
+    } else if (data.parsed.type === 'START' && state && !state.is_running) {
+      showMessage('Scan an order barcode first', 'error');
+    } else {
+      clearMessage();
+    }
+
+    await refresh();
+
+  } catch (err) {
+    enqueue(scan);
+  }
+}
+
+async function flushQueue() {
+  const queue = loadQueue();
+  if (queue.length === 0) return;
+
+  const scan = queue[0];
+
+  try {
+    const response = await fetch('/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(scan),
+    });
+
+    if (!response.ok && response.status >= 500) return;
+
+    const current = loadQueue();
+    current.shift();
+    saveQueue(current);
+
+    if (current.length === 0) {
+      clearMessage();
+      await refresh();
+    }
+  } catch (err) {
+    // Still offline. Try again on the next poll.
+  }
+}
+
+// ── Fetching current state ───────────────────────────────────────
+async function refresh() {
+  if (!TOKEN) return;
+
+  try {
+    const response = await fetch('/api/stations/current?token=' + encodeURIComponent(TOKEN));
+    if (!response.ok) {
+      showMessage('Unknown device token: ' + TOKEN, 'error');
+      return;
+    }
+    state = await response.json();
+
+    if (state.server_now_utc) {
+      clockOffsetMs = new Date(state.server_now_utc).getTime() - Date.now();
+    }
+    render();
+    clearMessage();
+  } catch (err) {
+    showMessage('Cannot reach server', 'error');
+  }
+}
+
+// ── Rendering ────────────────────────────────────────────────────
+function render() {
+  if (!state) return;
+
+  setText('station', state.station_name || state.station_id || '–');
+
+  const names = state.employee_names || [];
+  setText('employee', names.length > 0 ? names.join(', ') : 'No badge scanned');
+
+  // The order slot doubles as the idle state. 'Ready to scan' is an
+  // invitation to act; a dash is just an absence.
+  const orderEl = document.getElementById('order');
+  if (state.order_ref) {
+    orderEl.textContent = state.order_ref;
+    orderEl.className = 'order';
+  } else {
+    orderEl.textContent = 'Ready to scan';
+    orderEl.className = 'order empty';
+  }
+
+  setText('description', state.description || '');
+
+  setScan('status-start', 'value-start',
+          state.started_at_utc ? formatTime(state.started_at_utc) : '–',
+          state.started_at_utc ? 'done' : '');
+
+  setScan('status-flag', 'value-flag',
+          state.flagged_at_utc ? formatTime(state.flagged_at_utc) : '–',
+          state.flagged_at_utc ? 'warn' : '');
+
+  // Finish is never set while a session is open — by definition an open
+  // session hasn't finished.
+  setScan('status-finish', 'value-finish', '–', '');
+
+  setText('expected', 'Coming soon');
+
+  document.body.classList.toggle('is-running', !!state.is_running);
+  document.body.classList.toggle('is-flagged', !!state.is_flagged);
+}
+
+// Mean of recent closed sessions. A placeholder baseline until real expected
+// times exist — replacing it means changing this one function.
+function expectedSeconds() {
+    return null;
+  }
+
+
+// ── The timer ────────────────────────────────────────────────────
+// Recomputed each second from the server's start timestamp rather than
+// counted locally, so a reload or a screen sleep never loses the count.
+function tick() {
+  const el = document.getElementById('elapsed');
+
+  if (!state || !state.is_running || !state.started_at_utc) {
+    el.textContent = '–';
+    el.className = 'elapsed idle';
+    document.body.classList.remove('is-over');
+    return;
+  }
+
+  const started = new Date(state.started_at_utc);
+  const seconds = Math.floor((Date.now() + clockOffsetMs - started.getTime()) / 1000);
+
+  el.textContent = formatDuration(seconds);
+
+  const mean = expectedSeconds();
+  const over = mean !== null && seconds > mean;
+
+  el.className = over ? 'elapsed over' : 'elapsed';
+  document.body.classList.toggle('is-over', over);
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
+function formatDuration(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+function formatTime(isoString) {
+  return new Date(isoString).toLocaleTimeString('en-CA', {
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function setText(id, value) {
+  document.getElementById(id).textContent = value;
+}
+
+function setScan(boxId, valueId, text, kind) {
+  document.getElementById(boxId).className = 'scan ' + kind;
+  setText(valueId, text);
+}
+
+function showMessage(text, kind) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.className = 'message show ' + kind;
+}
+
+function clearMessage() {
+  document.getElementById('message').className = 'message';
+}
+
+function flash() {
+  const el = document.getElementById('flash');
+  el.className = 'flash on';
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    el.className = 'flash';
+  }));
+}
+
+// ── Startup ──────────────────────────────────────────────────────
+tick();
+setInterval(tick, 1000);
+
+refresh();
+setInterval(() => { refresh(); flushQueue(); }, 10000);
+
+// Wall clock, corrected by the same server offset as the timer so the two
+// can never disagree.
+setInterval(() => {
+  setText('wallclock', new Date(Date.now() + clockOffsetMs).toLocaleTimeString('en-CA', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }));
+}, 1000);
+</script>
+</body>
+</html>

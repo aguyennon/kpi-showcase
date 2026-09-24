@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<!--
+  app/static/admin.html
+
+  Read at a desk, not across a bay — so normal text sizes and dense tables,
+  unlike the station display.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPI — Admin</title>
+<style>
+  :root {
+    --bg: #171b21; --raised: #1e242c; --rule: #2b333d;
+    --text: #eef2f6; --muted: #7d8b99;
+    --accent: #4a9fd8; --good: #3f9e6b; --warn: #d9912f; --over: #cc4b41;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    padding: 24px 32px 48px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 26px;
+  }
+  header h1 { font-size: 20px; font-weight: 600; margin-right: auto; }
+
+  select, button {
+    font: inherit;
+    color: var(--text);
+    background: var(--raised);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 7px 12px;
+    cursor: pointer;
+  }
+
+  h2 { font-size: 15px; font-weight: 600; margin: 30px 0 12px; }
+  .hint { color: var(--muted); font-size: 13px; margin: -6px 0 12px; }
+
+  /* Tables scroll sideways inside their own box on a narrow screen, rather
+     than pushing the whole page wider. */
+  .scroll { overflow-x: auto; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left;
+    font-weight: 500;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  /* tabular-nums lines digits up in a column — reading down a column of
+     durations is the whole point of this table. */
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.desc { white-space: normal; min-width: 220px; }
+
+  /* A rate worth noticing. Above 10% of sessions ending AUTOCLOSED or
+     INCOMPLETE, the durations at that station aren't trustworthy yet. */
+  .bad { color: var(--over); font-weight: 600; }
+
+  .chip {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 7px;
+    margin-right: 4px;
+    border-radius: 3px;
+    background: var(--rule);
+  }
+
+  .status { font-size: 12px; font-weight: 600; }
+  .status.CLOSED     { color: var(--good); }
+  .status.OPEN       { color: var(--accent); }
+  .status.AUTOCLOSED { color: var(--warn); }
+  .status.INCOMPLETE { color: var(--over); }
+
+  .flag { color: var(--warn); }
+  .empty { color: var(--muted); padding: 22px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>KPI ADMIN VIEW</h1>
+  <label for="days" style="color:var(--muted)">Show</label>
+  <select id="days">
+    <option value="1">Last 24 hours</option>
+    <option value="7" selected>Last 7 days</option>
+    <option value="30">Last 30 days</option>
+    <option value="90">Last 90 days</option>
+  </select>
+  <!-- Logout must be a POST, not a link. A GET logout can be triggered by
+       any page that embeds an image pointing at it. -->
+  <form method="post" action="/admin/logout">
+    <button type="submit">Sign out</button>
+  </form>
+</header>
+
+<h2>By station</h2>
+<p class="hint">Averages use counted sessions only — closed with a FINISH scan and not flagged.</p>
+<div class="scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Station</th>
+        <th class="num">Sessions</th>
+        <th class="num">Counted Sessions</th>
+        <th class="num">Mean</th>
+        <th class="num">Median</th>
+        <th class="num">Flagged</th>
+        <th class="num">Autoclosed</th>
+        <th class="num">Incomplete</th>
+        <th class="num">Open now</th>
+      </tr>
+    </thead>
+    <tbody id="stations"></tbody>
+  </table>
+</div>
+
+<h2>Sessions</h2>
+<div class="scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Started</th>
+        <th>Station</th>
+        <th>Employee</th>
+        <th>Order</th>
+        <th>Description</th>
+        <th>Features</th>
+        <th class="num">Duration</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="sessions"></tbody>
+  </table>
+</div>
+
+<script>
+// ── Loading ──────────────────────────────────────────────────────
+async function load() {
+  const days = document.getElementById('days').value;
+  const response = await fetch('/api/admin/sessions?days=' + days);
+
+  // Session expired or never signed in — send them to the login page rather
+  // than showing an empty report that looks like "no data".
+  if (response.status === 401) {
+    location.href = '/admin/login';
+    return;
+  }
+
+  const data = await response.json();
+  renderStations(data.stations);
+  renderSessions(data.sessions);
+}
+
+document.getElementById('days').addEventListener('change', load);
+
+// ── Rendering ────────────────────────────────────────────────────
+//
+// Every value goes in through textContent, never innerHTML. Descriptions and
+// order numbers come from another system's database — if one ever contained
+// '<script>', innerHTML would run it in an admin's browser. textContent can
+// only ever produce text.
+
+function renderStations(stations) {
+  const body = document.getElementById('stations');
+  body.replaceChildren();   // clears the previous load's rows
+
+  if (stations.length === 0) {
+    body.append(emptyRow(9, 'No sessions in this period.'));
+    return;
+  }
+
+  for (const s of stations) {
+    body.append(row([
+      cell(s.name),
+      cell(s.sessions, 'num'),
+      cell(s.clean, 'num'),
+      cell(fmtDuration(s.mean_seconds), 'num'),
+      cell(fmtDuration(s.median_seconds), 'num'),
+      cell(s.flagged_pct + '%', 'num'),
+      // Only the data-quality rates get highlighted. A high flag rate may be
+      // genuine; a high autoclose rate means people aren't scanning FINISH.
+      cell(s.autoclosed_pct + '%', 'num' + (s.autoclosed_pct > 10 ? ' bad' : '')),
+      cell(s.incomplete_pct + '%', 'num' + (s.incomplete_pct > 10 ? ' bad' : '')),
+      cell(s.open, 'num'),
+    ]));
+  }
+}
+
+function renderSessions(sessions) {
+  const body = document.getElementById('sessions');
+  body.replaceChildren();
+
+  if (sessions.length === 0) {
+    body.append(emptyRow(8, 'No sessions in this period.'));
+    return;
+  }
+
+  for (const s of sessions) {
+    const features = document.createElement('td');
+    for (const f of s.features) {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = f;
+      features.append(chip);
+    }
+
+    const status = cell(s.status);
+    status.firstChild.className = 'status ' + s.status;
+    if (s.is_flagged) {
+      const flag = document.createElement('span');
+      flag.className = 'flag';
+      flag.textContent = ' · flagged';
+      status.append(flag);
+    }
+
+    body.append(row([
+      cell(fmtDateTime(s.started_at_utc)),
+      cell(s.station),
+      cell(s.employee),
+      cell(s.order_ref),
+      cell(s.description || '', 'desc'),
+      features,
+      cell(fmtDuration(s.duration_seconds), 'num'),
+      status,
+    ]));
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
+function cell(value, cls) {
+  const td = document.createElement('td');
+  if (cls) td.className = cls;
+  const span = document.createElement('span');
+  span.textContent = value ?? '—';
+  td.append(span);
+  return td;
+}
+
+function row(cells) {
+  const tr = document.createElement('tr');
+  tr.append(...cells);   // ... spreads the array into separate arguments
+  return tr;
+}
+
+function emptyRow(colspan, text) {
+  const tr = document.createElement('tr');
+  const td = document.createElement('td');
+  td.colSpan = colspan;
+  td.className = 'empty';
+  td.textContent = text;
+  tr.append(td);
+  return tr;
+}
+
+function fmtDuration(seconds) {
+  if (seconds === null || seconds === undefined) return '—';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? h + ':' + mm + ':' + ss : m + ':' + ss;
+}
+
+function fmtDateTime(iso) {
+  // UTC from the server, shown in the browser's local time — the conversion
+  // the whole store-UTC decision was built around.
+  return new Date(iso).toLocaleString('en-CA', {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+load();
+</script>
+</body>
+</html>
