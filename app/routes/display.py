@@ -32,14 +32,14 @@ async def current_state(token: str):
 
     now = datetime.now(timezone.utc)
     # returns a list of whoever is logged in
-    employee_ids = await employee_repo.find_employee_at_station(station_id, now)
+    employee_ids = await employee_repo.find_employee_at_device(token, now)
 
     employee_names = await employee_repo.find_employee_names(employee_ids)
 
-    events = await scan_repo.list_events_for_station(station_id)
+    events = await scan_repo.list_events_for_device(token)
     sessions = derive_sessions(events)
     # open session means no end time yet
-    open_session = next((s for s in sessions if s.ended_at_utc is None), None)
+    open_session = next((s for s in sessions if s.status == "OPEN"), None)
     # scoped to open session instead of all time because we only care for THIS current ongoing session.
     start_at = open_session.started_at_utc if open_session else None
     flagged_at = None

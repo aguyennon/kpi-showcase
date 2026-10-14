@@ -20,36 +20,25 @@ router = APIRouter()
 
 @router.post("/scan")
 async def record_scan(body: ScanBody):
-
-
     station_id = await scan_repo.resolve_device(body.device_token)
-
     if station_id is None:
         raise HTTPException(status_code=404, detail="Unknown device token")
-        
-    employee_ids = await employee_repo.find_employee_at_station(station_id, datetime.now(timezone.utc))
 
-    parsed = parse_scan(body.raw_code) # api reads the scanbody and pases the json -> validates it and hands you a typed object (code)
+    parsed = parse_scan(body.raw_code)
+    now = datetime.now(timezone.utc)
+
 
     if parsed.type == "BADGE":
         employee = await employee_repo.find_employee_by_number(parsed.employee_number)
 
         if employee is None:
-            await scan_repo.record_scan(NewScanEvent(
-                station_id=station_id,
-                device_token=body.device_token,
-                raw_code=body.raw_code,
-                event_type="BADGE",
-            ))
             raise HTTPException(status_code=404, detail="Unknown badge")
-
-        now = datetime.now(timezone.utc)
 
         open_assignment = await employee_repo.find_open_assignment(employee.id)
         if open_assignment is not None:
             await employee_repo.end_assignment(open_assignment.id, now)
 
-        await employee_repo.assign_station(employee.id, station_id)
+        await employee_repo.assign_station(employee.id, station_id, body.device_token)
 
     batch_no = None
     description = None
@@ -60,9 +49,11 @@ async def record_scan(body: ScanBody):
         if info is not None:
             batch_no = info.batch_no
             description = info.description
-            features = ",".join(detect_features(info.description)) 
+            features = ",".join(detect_features(info.description))
 
-    stored = await scan_repo.record_scan( NewScanEvent( # tweaking already made placeholders for this class - body
+    employee_ids = await employee_repo.find_employee_at_device(body.device_token, now)
+
+    stored = await scan_repo.record_scan(NewScanEvent(
         station_id=station_id,
         device_token=body.device_token,
         raw_code=body.raw_code,
@@ -74,7 +65,7 @@ async def record_scan(body: ScanBody):
         features=features,
     ))
 
-    return {"received": body.raw_code, "parsed": parsed, "stored": stored} #return dataclass, serialised into json automatically by api
+    return {"received": body.raw_code, "parsed": parsed, "stored": stored}
 
 
 @router.get("/stations/{station_id}/sessions")

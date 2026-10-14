@@ -64,7 +64,7 @@ def _summarise(sessions) -> dict:
     return {
         "sessions": total,
         "clean": len(clean),
-        "mean_secomds": round(statistics.mean(clean)) if clean else None,
+        "mean_seconds": round(statistics.mean(clean)) if clean else None,
         "median_seconds": round(statistics.median(clean)) if clean else None,
         "flagged_pct": pct(sum(s.is_flagged for s in sessions)),
         "autoclosed_pct": pct(sum(s.status == "AUTOCLOSED" for s in sessions)),
@@ -86,7 +86,7 @@ async def admin_sessions(days: int = 7):
 
     sessions = []
 
-    for _station_id, group in groupby(events, key=lambda e: e.station_id):
+    for _token, group in groupby(events, key=lambda e: e.device_token):
         for s in derive_sessions(list(group)):
             if s.started_at_utc >= start:
                 sessions.append(s)

@@ -17,7 +17,7 @@ def test_tolerates_trailing_whitespace():
     assert parse_scan("123-45678-90-1\r\n") == ParsedScan("ORDER", "123-45678-90-1")
 
 def test_recognises_a_badge_scan():
-    assert parse_scan("EMP-1000") == ParsedScan("BADGE", employee_number="1000")
+    assert parse_scan("EMP-466") == ParsedScan("BADGE", employee_number="466")
 
 def test_badge_prefix_alone_is_unknown():
     assert parse_scan("EMP-") == ParsedScan("UNKNOWN")

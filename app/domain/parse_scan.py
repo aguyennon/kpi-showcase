@@ -3,7 +3,7 @@ import re
 from .types import ParsedScan
 
 ORDER_PATTERN = re.compile(r"^\d{3}-\d{5}-\d{2,3}-\d$")
-BADGE_PATTERN = re.compile(r"^EMP-(\d+)$")
+BADGE_PATTERN = re.compile(r"^(?:EMP-)?(\d{3})$")
 
 def parse_scan(raw_code: str) -> ParsedScan:
     code = raw_code.strip()

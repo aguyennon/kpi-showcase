@@ -45,6 +45,7 @@ async def verify_admin_login(username: str, password: str) -> bool:
             username,
         )
         row = cursor.fetchone()
+        
 
     if row is None:
         bcrypt.checkpw(password.encode(), _DUMMY_HASH)

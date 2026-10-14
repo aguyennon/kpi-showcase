@@ -100,6 +100,20 @@ class SqlScanRepository:
             rows = cursor.fetchall()
 
         return [_row_to_event(row) for row in rows]
+    
+
+    async def list_events_for_device(self, device_token: str) -> list[ScanEvent]:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT {_EVENT_COLUMNS} FROM dbo.ScanEvent "
+                "WHERE DeviceToken = ? "
+                "ORDER BY ReceivedAtUtc, ScanEventId",
+                device_token,
+            )
+            rows = cursor.fetchall()
+
+        return [_row_to_event(row) for row in rows]
 
     
     async def list_events_between(self, start_utc: datetime, end_utc: datetime) -> list:
@@ -108,7 +122,7 @@ class SqlScanRepository:
             cursor.execute(
                 f"SELECT {_EVENT_COLUMNS} FROM dbo.ScanEvent "
                 "WHERE ReceivedAtUtc >= ? AND ReceivedAtUtc < ? "
-                "ORDER BY StationId, ReceivedAtUtc, ScanEventId",
+                "ORDER BY DeviceToken, ReceivedAtUtc, ScanEventId",
                 start_utc,
                 end_utc,
             )
