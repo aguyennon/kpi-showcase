@@ -1,7 +1,13 @@
+import asyncio
+import os
+import httpx
+
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse
 
+from app.drawing import crop_drawing, read_items
+from app.repositories.order_lookup import parse_barcode
 from app.dependencies import scan_repo, employee_repo
 from app.domain.derive_sessions import derive_sessions
 from app.db import get_connection, _as_utc
@@ -27,7 +33,7 @@ async def current_state(token: str):
 
     if row is None:
         raise HTTPException(status_code=404, detail="Unknown device token")
-    
+
     station_id, station_name = row[0], row[1]
 
     now = datetime.now(timezone.utc)
@@ -81,3 +87,86 @@ async def current_state(token: str):
         ][-10:],
         # that takes the last ten, slicing past the end is safe in python
     }
+
+async def _fetch_drawing_png(order_ref: str):
+    """Shared by both drawing routes: validates the code, downloads the PNG
+    from dalmenit, and returns (product number, PNG bytes).
+    Pulled into one function so the two routes can't drift apart."""
+
+    code = parse_barcode(order_ref)
+    if code is None:
+        raise HTTPException(status_code=404, detail="Not an order code")
+
+    # Drop the quantity: 382-01309-239-1 -> 382-01309-239
+    ref = f"{code.commande_id}-{code.produit_id}"
+    url = os.environ["KPI_DRAWING_PAGE_URL"].format(ref=ref)
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            upstream = await client.get(url)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Drawing service unreachable")
+
+    if upstream.status_code != 200:
+        raise HTTPException(status_code=404, detail="No drawing for this order")
+
+    if not upstream.headers.get("content-type", "").startswith("image/"):
+        raise HTTPException(status_code=502, detail="Not an image")
+
+    return int(code.produit_id), upstream.content
+
+
+@router.get("/api/drawing/{order_ref}")
+async def drawing(order_ref: str):
+    """/api/drawing/382-01309-239-1  ->  the cropped drawing from
+    http://dalmenit:8816/asm/382-01309-239"""
+
+    # "_" is the convention for "a value I'm deliberately ignoring":
+    # this route doesn't need the product number.
+    _, png = await _fetch_drawing_png(order_ref)
+    cropped = await asyncio.to_thread(crop_drawing, png)
+
+    return Response(
+        content=cropped,
+        media_type="image/png",
+        headers={"Cache-Control": "max-age=3600"},
+    )
+
+
+# OCR results per drawing, kept in memory: "382-01309-239" -> [items].
+# OCR takes a fraction of a second and the list for a product never changes,
+# so each one is read once and remembered. Emptied when the server restarts,
+# which is fine: it refills itself on the next scans.
+_items_cache: dict[str, list[dict]] = {}
+
+
+@router.get("/api/drawing/{order_ref}/items")
+async def drawing_items(order_ref: str):
+    """/api/drawing/382-01309-239-1/items  ->
+    {"selected": 239, "items": [{"item": 239, "code": "F1", "width": 825, "height": 1384}, ...]}
+
+    "selected" is the product that was scanned, so the display can highlight
+    it the same way the drawing highlights it in orange."""
+
+    code = parse_barcode(order_ref)
+    if code is None:
+        raise HTTPException(status_code=404, detail="Not an order code")
+    ref = f"{code.commande_id}-{code.produit_id}"
+
+    if ref in _items_cache:
+        return {"selected": int(code.produit_id), "items": _items_cache[ref]}
+
+    selected, png = await _fetch_drawing_png(order_ref)
+
+    # OCR runs Tesseract as a separate program and waits for it, so it goes
+    # on its own thread for the same reason as the crop: the server keeps
+    # answering every other screen in the meantime.
+    items = await asyncio.to_thread(read_items, png)
+
+    # Only remember SUCCESSFUL reads. An empty result might be a one-off
+    # glitch, and caching it would hide the list for that product until the
+    # next restart.
+    if items:
+        _items_cache[ref] = items
+
+    return {"selected": selected, "items": items}

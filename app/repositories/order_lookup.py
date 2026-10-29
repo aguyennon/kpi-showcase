@@ -24,7 +24,7 @@ class ScannedCode:
 def parse_barcode(raw: str) -> Optional[ScannedCode]:
     parts = raw.strip().split("-")
 
-    if len(parts) != 4:
+    if len(parts) != 4: # if the length of the barcode isnt 4 parts, dont return anything
         return None
 
     return ScannedCode(
@@ -32,6 +32,7 @@ def parse_barcode(raw: str) -> Optional[ScannedCode]:
         produit_id=parts[2],
         quantite_id=parts[3],
     )
+
 
 
 _FEATURE_PATTERNS = {

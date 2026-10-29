@@ -1,23 +1,4 @@
 <!DOCTYPE html>
-<!--
-  app/static/display.html
-
-  Station monitor. Open as:  /display?token=prep
-
-  DESIGN NOTE — why it looks like this:
-
-  This is a lineside display, not a dashboard. It's read from across a work bay
-  by someone holding a window frame, in a few seconds, without focusing. That
-  drives every choice:
-
-    - The timer is the hero. Everything else is supporting data and stays quiet.
-    - State is carried by a colour bar down the left edge and a background
-      shift, so the panel reads at a glance without anyone parsing text. This
-      is the andon convention from manufacturing — status as a colour you see
-      from a distance.
-    - No web fonts. The network blocks external CDNs, and a font that failed to
-      load would wreck the layout. Typography works through scale and weight.
--->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -35,10 +16,6 @@
     --over:  #cc4b41;
   }
 
-  /* Belt and braces against default insets. If a gap still shows at the top
-     and left after this, it's the TV's overscan cropping the picture, not the
-     page — that's an LG picture setting, usually "Just Scan" or
-     "Aspect Ratio: Original". */
   * { box-sizing: border-box; margin: 0; padding: 0; border: 0; }
 
   html, body {
@@ -205,6 +182,30 @@
     transition: opacity 140ms ease-out;
   }
   .flash.on { opacity: 0.22; transition: none; }
+
+  .drawing-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 32px;
+    margin-top: 28px;
+  }
+
+  .drawing {
+    display: none;
+    min-width: 0;
+    max-width: 100%;
+    max-height: 45vh;
+    border-radius: 8px;
+  }
+
+  .items {
+    list-style: none;
+    font-size: 26px;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+  .items li { padding: 6px 0; white-space: pre; }
+  .items li.selected { color: var(--warn); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -251,6 +252,10 @@
       <div class="job">
         <div class="order empty" id="order">Ready to scan</div>
         <div class="description" id="description"></div>
+        <div class="drawing-row">
+          <img class="drawing" id="drawing" alt="">
+          <ul class="items" id="items"></ul>
+        </div>
       </div>
     </div>
   
@@ -451,6 +456,7 @@ function render() {
   }
 
   setText('description', state.description || '');
+  updateDrawing(state.order_ref);
 
   setScan('status-start', 'value-start',
           state.started_at_utc ? formatTime(state.started_at_utc) : '–',
@@ -517,6 +523,41 @@ function formatTime(isoString) {
 
 function setText(id, value) {
   document.getElementById(id).textContent = value;
+}
+
+let drawingRef = null;
+
+function updateDrawing(orderRef) {
+  if (orderRef === drawingRef) return;  
+  drawingRef = orderRef;
+
+  const img = document.getElementById('drawing');
+  const list = document.getElementById('items');
+  img.style.display = 'none';
+  list.replaceChildren();
+
+  if (!orderRef) {
+    img.removeAttribute('src');
+    return;
+  }
+
+  img.onload = function () { img.style.display = 'block'; };
+  img.onerror = function () { img.style.display = 'none'; };
+  img.src = '/api/drawing/' + encodeURIComponent(orderRef);
+
+  fetch('/api/drawing/' + encodeURIComponent(orderRef) + '/items')
+    .then(function (response) { return response.ok ? response.json() : null; })
+    .then(function (data) {
+      if (!data || drawingRef !== orderRef) return;
+
+      for (const it of data.items) {
+        const li = document.createElement('li');
+        li.textContent = it.item + '   ' + it.code + '   ' + it.width + ' × ' + it.height;
+        if (it.item === data.selected) li.className = 'selected';
+        list.append(li);
+      }
+    })
+    .catch(function () {});
 }
 
 function setScan(boxId, valueId, text, kind) {
